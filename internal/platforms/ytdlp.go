@@ -1,23 +1,3 @@
-/*
-  - This file is part of YukkiMusic.
-    *
-
-  - YukkiMusic — A Telegram bot that streams music into group voice chats with seamless playback and control.
-  - Copyright (C) 2025 TheTeamVivek
-    *
-  - This program is free software: you can redistribute it and/or modify
-  - it under the terms of the GNU General Public License as published by
-  - the Free Software Foundation, either version 3 of the License, or
-  - (at your option) any later version.
-    *
-  - This program is distributed in the hope that it will be useful,
-  - but WITHOUT ANY WARRANTY; without even the implied warranty of
-  - MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-  - GNU General Public License for more details.
-    *
-  - You should have received a copy of the GNU General Public License
-  - along with this program. If not, see <https://www.gnu.org/licenses/>.
-*/
 package platforms
 
 import (
@@ -57,7 +37,6 @@ type ytdlpInfo struct {
 	Entries     []ytdlpInfo `json:"entries"`
 }
 
-// URLs that are likely handled by YouTube
 var youtubePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(youtube\.com|youtu\.be|music\.youtube\.com)`),
 }
@@ -72,75 +51,44 @@ func (y *YtdlpPlatform) Name() state.PlatformName {
 	return y.name
 }
 
-// CanGetTracks checks if this is a valid URL that yt-dlp might handle
 func (y *YtdlpPlatform) CanGetTracks(query string) bool {
 	query = strings.TrimSpace(query)
-
-	// Must be a URL
 	parsedURL, err := url.Parse(query)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return false
 	}
-
 	return true
 }
 
-// GetTracks extracts metadata using yt-dlp
-func (y *YtdlpPlatform) GetTracks(
-	query string,
-	video bool,
-) ([]*state.Track, error) {
-	query = strings.TrimSpace(query)
-
+func (y *YtdlpPlatform) GetTracks(query string, video bool) ([]*state.Track, error) {
 	gologging.InfoF("YtDlp: Extracting metadata for %s", query)
 
 	info, err := y.extractMetadata(query)
 	if err != nil {
-		gologging.ErrorF("YtDlp: Failed to extract metadata: %v", err)
-		return nil, fmt.Errorf("failed to extract metadata: %w", err)
+		return nil, err
 	}
 
-	// Check if it's a live stream
 	if info.IsLive {
-		gologging.Info("YtDlp: Detected live stream, returning error")
-		return nil, errors.New(
-			"live streams are not supported by yt-dlp downloader",
-		)
+		return nil, errors.New("live streams are not supported")
 	}
 
 	var tracks []*state.Track
 
-	// Handle playlists
 	if len(info.Entries) > 0 {
-		gologging.InfoF(
-			"YtDlp: Found playlist with %d entries",
-			len(info.Entries),
-		)
 		for _, entry := range info.Entries {
 			if entry.IsLive {
-				continue // Skip live entries
+				continue
 			}
-			track := y.infoToTrack(&entry, video)
-			tracks = append(tracks, track)
+			tracks = append(tracks, y.infoToTrack(&entry, video))
 		}
 	} else {
-		track := y.infoToTrack(info, video)
-		tracks = []*state.Track{track}
-	}
-
-	if len(tracks) > 0 {
-		gologging.InfoF(
-			"YtDlp: Successfully extracted %d track(s)",
-			len(tracks),
-		)
+		tracks = append(tracks, y.infoToTrack(info, video))
 	}
 
 	return tracks, nil
 }
 
 func (y *YtdlpPlatform) CanDownload(source state.PlatformName) bool {
-	// YtDlp can download from itself (when it extracts info)
-	// and from YouTube platform
 	return source == y.name || source == PlatformYouTube
 }
 
@@ -149,44 +97,39 @@ func (y *YtdlpPlatform) Download(
 	track *state.Track,
 	_ *telegram.NewMessage,
 ) (string, error) {
+
 	if f := findFile(track); f != "" {
-		gologging.Debug("Ytdlp: Download -> Cached File -> " + f)
 		return f, nil
 	}
-
-	gologging.InfoF("YtDlp: Downloading %s", track.Title)
 
 	args := []string{
 		"--no-playlist",
 		"--no-part",
 		"--geo-bypass",
-		"--no-warnings",
-		"--ignore-errors",
 		"--no-check-certificate",
-		"-q",
+		"--print", "after_move:filepath",
 		"-o", getPath(track, ".%(ext)s"),
 	}
 
-	// Format selection
 	if track.Video {
-		args = append(
-			args,
+		args = append(args,
 			"-f",
-			"(b[height>=360][height<=1080]/bv*[height>=360][height<=1080]/bv*)+(ba[abr>=180][abr<=360]/ba)/b",
+			"bv*[height<=1080]+ba/b",
 		)
 	} else {
 		args = append(args,
-			"-f", "ba[abr>=180][abr<=360]/ba",
+			"-f", "ba/b",
 			"-x",
+			"--audio-format", "mp3",
+			"--audio-quality", "0",
 			"--concurrent-fragments", "4",
 		)
 	}
 
-	// Cookies (YouTube only)
 	if y.isYouTubeURL(track.URL) {
-		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil &&
-			cookieFile != "" {
+		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil && cookieFile != "" {
 			args = append(args, "--cookies", cookieFile)
+			gologging.InfoF("YtDlp: Using cookies: %s", cookieFile)
 		}
 	}
 
@@ -198,55 +141,44 @@ func (y *YtdlpPlatform) Download(
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		errStr := strings.TrimSpace(stderr.String())
-		outStr := strings.TrimSpace(stdout.String())
+	gologging.InfoF("YtDlp CMD: yt-dlp %s", strings.Join(args, " "))
 
+	err := cmd.Run()
+	outStr := strings.TrimSpace(stdout.String())
+	errStr := strings.TrimSpace(stderr.String())
+
+	if err != nil {
 		gologging.ErrorF(
-			"YtDlp: Download failed for %s: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
+			"YtDlp FAILED\nURL: %s\nERROR: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
 			track.URL, err, outStr, errStr,
 		)
 		findAndRemove(track)
-
-		if errors.Is(err, context.Canceled) ||
-			errors.Is(err, context.DeadlineExceeded) {
-			return "", err
-		}
-
-		return "", fmt.Errorf("yt-dlp error: %w", err)
+		return "", fmt.Errorf("yt-dlp error:\n%s", errStr)
 	}
 
-	path := findFile(track)
-	if path == "" {
-		return "", errors.New("yt-dlp did not return output file path")
+	if outStr == "" {
+		return "", errors.New("yt-dlp did not return downloaded file path")
 	}
 
-	gologging.InfoF("YtDlp: Successfully downloaded %s", path)
-	return path, nil
+	gologging.InfoF("YtDlp Downloaded: %s", outStr)
+	return outStr, nil
 }
 
 func (*YtdlpPlatform) CanSearch() bool { return false }
 
-func (*YtdlpPlatform) Search(
-	string,
-	bool,
-) ([]*state.Track, error) {
+func (*YtdlpPlatform) Search(string, bool) ([]*state.Track, error) {
 	return nil, nil
 }
 
-// extractMetadata uses yt-dlp to extract video/audio metadata
 func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	args := []string{
 		"-j",
-		"--flat-playlist",
 		"--no-warnings",
 		"--no-check-certificate",
 	}
 
-	// Add cookies only for YouTube
 	if y.isYouTubeURL(urlStr) {
-		cookieFile, err := cookies.GetRandomCookieFile()
-		if err == nil && cookieFile != "" {
+		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil && cookieFile != "" {
 			args = append(args, "--cookies", cookieFile)
 		}
 	}
@@ -260,57 +192,22 @@ func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		errStr := stderr.String()
 		gologging.ErrorF(
-			"YtDlp: Metadata extraction failed: %v\n%s",
-			err,
-			errStr,
+			"YtDlp Metadata Error\nURL: %s\nERROR: %v\nSTDERR:\n%s",
+			urlStr, err, stderr.String(),
 		)
-		return nil, fmt.Errorf("metadata extraction failed: %w", err)
+		return nil, fmt.Errorf("yt-dlp metadata error:\n%s", stderr.String())
 	}
 
-	output := stdout.String()
-	lines := strings.Split(strings.TrimSpace(output), "\n")
-
-	// Handle playlists (multiple JSON objects)
-	if len(lines) > 1 {
-		var info ytdlpInfo
-		info.Entries = make([]ytdlpInfo, 0, len(lines))
-
-		for _, line := range lines {
-			var entry ytdlpInfo
-			if err := json.Unmarshal([]byte(line), &entry); err != nil {
-				gologging.ErrorF("YtDlp: Failed to parse entry JSON: %v", err)
-				continue
-			}
-			info.Entries = append(info.Entries, entry)
-		}
-
-		if len(info.Entries) == 0 {
-			return nil, errors.New("no valid entries found in playlist")
-		}
-
-		return &info, nil
-	}
-
-	// Single video/audio
 	var info ytdlpInfo
-	if err := json.Unmarshal([]byte(output), &info); err != nil {
-		gologging.ErrorF("YtDlp: Failed to parse JSON: %v", err)
-		return nil, fmt.Errorf("failed to parse JSON: %w", err)
+	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
+		return nil, err
 	}
 
 	return &info, nil
 }
 
-// infoToTrack converts yt-dlp info to Track
-func (y *YtdlpPlatform) infoToTrack(
-	info *ytdlpInfo,
-	video bool,
-) *state.Track {
-	duration := int(info.Duration)
-
-	// Use original_url if available, otherwise webpage_url
+func (y *YtdlpPlatform) infoToTrack(info *ytdlpInfo, video bool) *state.Track {
 	trackURL := info.URL
 	if info.OriginalURL != "" {
 		trackURL = info.OriginalURL
@@ -319,7 +216,7 @@ func (y *YtdlpPlatform) infoToTrack(
 	return &state.Track{
 		ID:       info.ID,
 		Title:    info.Title,
-		Duration: duration,
+		Duration: int(info.Duration),
 		Artwork:  info.Thumbnail,
 		URL:      trackURL,
 		Source:   PlatformYtDlp,
@@ -327,7 +224,6 @@ func (y *YtdlpPlatform) infoToTrack(
 	}
 }
 
-// isYouTubeURL checks if the URL is from YouTube
 func (y *YtdlpPlatform) isYouTubeURL(urlStr string) bool {
 	for _, pattern := range youtubePatterns {
 		if pattern.MatchString(urlStr) {
