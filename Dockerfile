@@ -26,6 +26,7 @@ RUN chmod +x install.sh && \
 
 FROM debian:bookworm-slim
 
+# Base packages
 RUN apt-get update && \
     apt-get install -y \
         ffmpeg \
@@ -36,13 +37,24 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 
+# -------------------------------------------------------
+# Force IPv4 networking (Railway IPv6 breaks ntgcalls UDP)
+# -------------------------------------------------------
+RUN echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf && \
+    echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
+
+# Go DNS resolver + force IPv4
+ENV GODEBUG=netdns=go+v4
+ENV NTG_CALLS_IPV4_ONLY=1
+
+
 # -------- yt-dlp --------
 RUN curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
     -o /usr/local/bin/yt-dlp && \
     chmod 0755 /usr/local/bin/yt-dlp
 
 
-# -------- Node.js (LTS, required for yt-dlp EJS) --------
+# -------- Node.js (LTS, required for yt-dlp EJS solving) --------
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
