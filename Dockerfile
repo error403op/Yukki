@@ -35,34 +35,31 @@ RUN apt-get update && \
         zlib1g && \
     rm -rf /var/lib/apt/lists/*
 
+
 # -------- yt-dlp --------
 RUN curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
     -o /usr/local/bin/yt-dlp && \
     chmod 0755 /usr/local/bin/yt-dlp
 
 
-# -------- Node.js (proper LTS) --------
+# -------- Node.js (LTS, required for yt-dlp EJS) --------
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
     apt-get install -y nodejs && \
     rm -rf /var/lib/apt/lists/*
 
 
-# -------- Deno (correct install path) --------
+# -------- Deno --------
 ENV DENO_INSTALL=/usr/local/deno
 RUN mkdir -p $DENO_INSTALL && \
     curl -fsSL https://deno.land/install.sh | sh
 ENV PATH=$DENO_INSTALL/bin:$PATH
 
 
-# -------- Bun (correct install path) --------
+# -------- Bun --------
 ENV BUN_INSTALL=/usr/local/bun
 RUN mkdir -p $BUN_INSTALL && \
     curl -fsSL https://bun.sh/install | bash
 ENV PATH=$BUN_INSTALL/bin:$PATH
-
-
-# -------- yt-dlp EJS Solver --------
-RUN npm install -g yt-dlp-ejs
 
 
 # -------- Certificates --------
