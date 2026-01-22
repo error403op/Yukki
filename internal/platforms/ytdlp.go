@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
 	"regexp"
 	"strings"
@@ -113,8 +114,7 @@ func (y *YtdlpPlatform) Download(
 
 	if track.Video {
 		args = append(args,
-			"-f",
-			"bv*[height<=1080]+ba/b",
+			"-f", "bv*[height<=1080]+ba/b",
 		)
 	} else {
 		args = append(args,
@@ -147,20 +147,49 @@ func (y *YtdlpPlatform) Download(
 	outStr := strings.TrimSpace(stdout.String())
 	errStr := strings.TrimSpace(stderr.String())
 
+	// Any yt-dlp failure: log everything, but NEVER expose internals to Telegram
 	if err != nil {
 		gologging.ErrorF(
-			"YtDlp FAILED\nURL: %s\nERROR: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
-			track.URL, err, outStr, errStr,
+			"YtDlp FAILED\nTitle: %s\nURL: %s\nERROR: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
+			track.Title, track.URL, err, outStr, errStr,
 		)
+
+		// Detect YouTube signature / challenge solver problem
+		if strings.Contains(errStr, "Signature solving failed") ||
+			strings.Contains(errStr, "challenge solving failed") {
+			gologging.Error(
+				"YtDlp: YouTube signature challenge failed. " +
+					"Install EJS runtime or Node.js.\n" +
+					"See: https://github.com/yt-dlp/yt-dlp/wiki/EJS",
+			)
+		}
+
 		findAndRemove(track)
-		return "", fmt.Errorf("yt-dlp error:\n%s", errStr)
+
+		// Clean message only
+		return "", errors.New("failed to download this media, try again later or use another source")
 	}
 
 	if outStr == "" {
-		return "", errors.New("yt-dlp did not return downloaded file path")
+		gologging.Error("YtDlp: yt-dlp returned empty output path")
+		findAndRemove(track)
+		return "", errors.New("download failed")
 	}
 
-	gologging.InfoF("YtDlp Downloaded: %s", outStr)
+	// Check empty file case
+	if fileInfo, err := os.Stat(outStr); err == nil {
+		if fileInfo.Size() == 0 {
+			gologging.ErrorF("YtDlp: Downloaded file is empty: %s", outStr)
+			findAndRemove(track)
+			return "", errors.New("download failed")
+		}
+	} else {
+		gologging.ErrorF("YtDlp: Cannot stat downloaded file: %s : %v", outStr, err)
+		findAndRemove(track)
+		return "", errors.New("download failed")
+	}
+
+	gologging.InfoF("YtDlp: Successfully downloaded %s", outStr)
 	return outStr, nil
 }
 
@@ -173,7 +202,6 @@ func (*YtdlpPlatform) Search(string, bool) ([]*state.Track, error) {
 func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	args := []string{
 		"-j",
-		"--no-warnings",
 		"--no-check-certificate",
 	}
 
@@ -196,12 +224,13 @@ func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 			"YtDlp Metadata Error\nURL: %s\nERROR: %v\nSTDERR:\n%s",
 			urlStr, err, stderr.String(),
 		)
-		return nil, fmt.Errorf("yt-dlp metadata error:\n%s", stderr.String())
+		return nil, errors.New("failed to extract media information")
 	}
 
 	var info ytdlpInfo
 	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
-		return nil, err
+		gologging.ErrorF("YtDlp JSON parse error: %v\nRAW:\n%s", err, stdout.String())
+		return nil, errors.New("failed to parse media information")
 	}
 
 	return &info, nil
