@@ -7,6 +7,7 @@ import "C"
 import (
 	"fmt"
 	"unsafe"
+	"sort"
 )
 
 func parseConnectionState(state C.ntg_connection_state_enum) ConnectionState {
@@ -141,18 +142,37 @@ func parseRtcServers(rtcServers []RTCServer) *C.ntg_rtc_server_struct {
 	if len(rtcServers) == 0 {
 		return nil
 	}
+
+	// 🔥 Sort RTC servers for best stability on Railway
+	sort.Slice(rtcServers, func(i, j int) bool {
+		a := rtcServers[i]
+		b := rtcServers[j]
+
+		// Prefer IPv4
+		if (a.Ipv4 != "") != (b.Ipv4 != "") {
+			return a.Ipv4 != ""
+		}
+		// Prefer TURN over STUN
+		if a.Turn != b.Turn {
+			return a.Turn
+		}
+		// Prefer TCP relay (Railway-friendly)
+		if a.Tcp != b.Tcp {
+			return a.Tcp
+		}
+		return false
+	})
+
 	cArray := C.malloc(
-		C.size_t(
-			len(rtcServers),
-		) * C.size_t(
-			unsafe.Sizeof(C.ntg_rtc_server_struct{}),
-		),
+		C.size_t(len(rtcServers)) *
+			C.size_t(unsafe.Sizeof(C.ntg_rtc_server_struct{})),
 	)
+
 	goSlice := (*[1 << 30]C.ntg_rtc_server_struct)(cArray)[:len(rtcServers):len(rtcServers)]
 	for i, server := range rtcServers {
 		goSlice[i] = C.ntg_rtc_server_struct{
 			ipv4:        C.CString(server.Ipv4),
-			ipv6:        nil,
+			ipv6:        nil, // IPv6 fully disabled
 			username:    C.CString(server.Username),
 			password:    C.CString(server.Password),
 			port:        C.uint16_t(server.Port),
