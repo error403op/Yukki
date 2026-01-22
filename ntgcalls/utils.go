@@ -152,7 +152,7 @@ func parseRtcServers(rtcServers []RTCServer) *C.ntg_rtc_server_struct {
 	for i, server := range rtcServers {
 		goSlice[i] = C.ntg_rtc_server_struct{
 			ipv4:        C.CString(server.Ipv4),
-			ipv6:        C.CString(server.Ipv6),
+			ipv6:        nil,
 			username:    C.CString(server.Username),
 			password:    C.CString(server.Password),
 			port:        C.uint16_t(server.Port),
@@ -178,7 +178,6 @@ func freeRtcServers(servers *C.ntg_rtc_server_struct, size C.int) {
 	goSlice := (*[1 << 30]C.ntg_rtc_server_struct)(unsafe.Pointer(servers))[:size:size]
 	for i := 0; i < int(size); i++ {
 		C.free(unsafe.Pointer(goSlice[i].ipv4))
-		C.free(unsafe.Pointer(goSlice[i].ipv6))
 		C.free(unsafe.Pointer(goSlice[i].username))
 		C.free(unsafe.Pointer(goSlice[i].password))
 		if goSlice[i].peerTag != nil {
