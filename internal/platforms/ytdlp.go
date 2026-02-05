@@ -41,6 +41,16 @@ var youtubePatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)(youtube\.com|youtu\.be|music\.youtube\.com)`),
 }
 
+// 🔥 Runtime priority (DO NOT reorder)
+var jsRuntimes = []string{
+	"node",
+	"bun",
+	"deno",
+}
+
+// 🔥 Elite player chain
+const ytPlayerClients = "youtube:player_client=android,tv,web,ios"
+
 func init() {
 	Register(60, &YtdlpPlatform{
 		name: PlatformYtDlp,
@@ -53,6 +63,7 @@ func (y *YtdlpPlatform) Name() state.PlatformName {
 
 func (y *YtdlpPlatform) CanGetTracks(query string) bool {
 	query = strings.TrimSpace(query)
+
 	parsedURL, err := url.Parse(query)
 	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return false
@@ -60,7 +71,10 @@ func (y *YtdlpPlatform) CanGetTracks(query string) bool {
 	return true
 }
 
+//////////////////////////////////////////////////////////////
+
 func (y *YtdlpPlatform) GetTracks(query string, video bool) ([]*state.Track, error) {
+
 	gologging.InfoF("YtDlp: Extracting metadata for %s", query)
 
 	info, err := y.extractMetadata(query)
@@ -88,9 +102,36 @@ func (y *YtdlpPlatform) GetTracks(query string, video bool) ([]*state.Track, err
 	return tracks, nil
 }
 
+//////////////////////////////////////////////////////////////
+
 func (y *YtdlpPlatform) CanDownload(source state.PlatformName) bool {
 	return source == y.name || source == PlatformYouTube
 }
+
+//////////////////////////////////////////////////////////////
+// 🔥 RUNTIME EXECUTOR (CORE UPGRADE)
+//////////////////////////////////////////////////////////////
+
+func runWithRuntime(ctx context.Context, runtime string, args []string) (string, string, error) {
+
+	fullArgs := append([]string{"--js-runtime", runtime}, args...)
+
+	cmd := exec.CommandContext(ctx, "yt-dlp", fullArgs...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+
+	return strings.TrimSpace(stdout.String()),
+		strings.TrimSpace(stderr.String()),
+		err
+}
+
+//////////////////////////////////////////////////////////////
+// DOWNLOAD
+//////////////////////////////////////////////////////////////
 
 func (y *YtdlpPlatform) Download(
 	ctx context.Context,
@@ -102,95 +143,95 @@ func (y *YtdlpPlatform) Download(
 		return f, nil
 	}
 
-	args := []string{
+	baseArgs := []string{
 		"--no-playlist",
-		"--no-part",
-		"--geo-bypass",
-		"--no-check-certificate",
+		"--ignore-errors",
+		"--no-warnings",
+
+		"--extractor-retries", "5",
+		"--fragment-retries", "5",
+		"--file-access-retries", "5",
+
+		"--socket-timeout", "20",
+		"--force-ipv4",
+
+		"--concurrent-fragments", "4",
+		"--throttled-rate", "100K",
+
+		"--max-filesize", "2G",
+
 		"--print", "after_move:filepath",
 		"-o", getPath(track, ".%(ext)s"),
 	}
 
-	if track.Video {
-		args = append(args,
-			"-f", "bv*[height<=1080]+ba/b",
-		)
-	} else {
-		args = append(args,
-			"-f", "ba/b",
-			"-x",
-			"--audio-format", "mp3",
-			"--audio-quality", "0",
-			"--concurrent-fragments", "4",
-		)
-	}
-
 	if y.isYouTubeURL(track.URL) {
-		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil && cookieFile != "" {
-			args = append(args, "--cookies", cookieFile)
-			gologging.InfoF("YtDlp: Using cookies: %s", cookieFile)
-		}
-	}
 
-	args = append(args, track.URL)
-
-	cmd := exec.CommandContext(ctx, "yt-dlp", args...)
-
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
-	gologging.InfoF("YtDlp CMD: yt-dlp %s", strings.Join(args, " "))
-
-	err := cmd.Run()
-	outStr := strings.TrimSpace(stdout.String())
-	errStr := strings.TrimSpace(stderr.String())
-
-	// Any yt-dlp failure: log everything, but NEVER expose internals to Telegram
-	if err != nil {
-		gologging.ErrorF(
-			"YtDlp FAILED\nTitle: %s\nURL: %s\nERROR: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
-			track.Title, track.URL, err, outStr, errStr,
+		baseArgs = append(baseArgs,
+			"--extractor-args",
+			ytPlayerClients,
 		)
 
-		// Detect YouTube signature / challenge solver problem
-		if strings.Contains(errStr, "Signature solving failed") ||
-			strings.Contains(errStr, "challenge solving failed") {
-			gologging.Error(
-				"YtDlp: YouTube signature challenge failed. " +
-					"Install EJS runtime or Node.js.\n" +
-					"See: https://github.com/yt-dlp/yt-dlp/wiki/EJS",
+		if track.Video {
+			baseArgs = append(baseArgs,
+				"-f", "bv*[height<=1080]+ba/b",
+			)
+		} else {
+			baseArgs = append(baseArgs,
+				"-f", "ba[ext=m4a]/ba/bestaudio",
+				"-x",
+				"--audio-format", "mp3",
+				"--audio-quality", "0",
 			)
 		}
 
-		findAndRemove(track)
-
-		// Clean message only
-		return "", errors.New("failed to download this media, try again later or use another source")
-	}
-
-	if outStr == "" {
-		gologging.Error("YtDlp: yt-dlp returned empty output path")
-		findAndRemove(track)
-		return "", errors.New("download failed")
-	}
-
-	// Check empty file case
-	if fileInfo, err := os.Stat(outStr); err == nil {
-		if fileInfo.Size() == 0 {
-			gologging.ErrorF("YtDlp: Downloaded file is empty: %s", outStr)
-			findAndRemove(track)
-			return "", errors.New("download failed")
+		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil && cookieFile != "" {
+			baseArgs = append(baseArgs, "--cookies", cookieFile)
 		}
+
 	} else {
-		gologging.ErrorF("YtDlp: Cannot stat downloaded file: %s : %v", outStr, err)
-		findAndRemove(track)
-		return "", errors.New("download failed")
+
+		if track.Video {
+			baseArgs = append(baseArgs,
+				"-f", "bestvideo+bestaudio/best",
+			)
+		} else {
+			baseArgs = append(baseArgs,
+				"-f", "bestaudio/best",
+			)
+		}
 	}
 
-	gologging.InfoF("YtDlp: Successfully downloaded %s", outStr)
-	return outStr, nil
+	baseArgs = append(baseArgs, track.URL)
+
+	//////////////////////////////////////////////////////////////
+	// 🔥 RUNTIME FALLBACK LOOP
+	//////////////////////////////////////////////////////////////
+
+	for _, runtime := range jsRuntimes {
+
+		gologging.InfoF("YtDlp attempting runtime: %s", runtime)
+
+		out, errStr, err := runWithRuntime(ctx, runtime, baseArgs)
+
+		if err == nil && out != "" {
+
+			fileInfo, statErr := os.Stat(out)
+			if statErr == nil && fileInfo.Size() > 0 {
+
+				gologging.InfoF("YtDlp SUCCESS with runtime %s → %s", runtime, out)
+				return out, nil
+			}
+		}
+
+		gologging.WarnF("Runtime %s failed: %v\n%s", runtime, err, errStr)
+	}
+
+	findAndRemove(track)
+
+	return "", errors.New("all JS runtimes failed to download media")
 }
+
+//////////////////////////////////////////////////////////////
 
 func (*YtdlpPlatform) CanSearch() bool { return false }
 
@@ -198,44 +239,57 @@ func (*YtdlpPlatform) Search(string, bool) ([]*state.Track, error) {
 	return nil, nil
 }
 
+//////////////////////////////////////////////////////////////
+// METADATA WITH FALLBACK
+//////////////////////////////////////////////////////////////
+
 func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
-	args := []string{
-		"-j",
-		"--no-check-certificate",
+
+	baseArgs := []string{
+		"--dump-single-json",
+		"--no-playlist",
+		"--extractor-retries", "5",
 	}
 
 	if y.isYouTubeURL(urlStr) {
+
+		baseArgs = append(baseArgs,
+			"--extractor-args",
+			ytPlayerClients,
+		)
+
 		if cookieFile, err := cookies.GetRandomCookieFile(); err == nil && cookieFile != "" {
-			args = append(args, "--cookies", cookieFile)
+			baseArgs = append(baseArgs, "--cookies", cookieFile)
 		}
 	}
 
-	args = append(args, urlStr)
+	baseArgs = append(baseArgs, urlStr)
 
-	cmd := exec.Command("yt-dlp", args...)
+	for _, runtime := range jsRuntimes {
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+		gologging.InfoF("Metadata attempting runtime: %s", runtime)
 
-	if err := cmd.Run(); err != nil {
-		gologging.ErrorF(
-			"YtDlp Metadata Error\nURL: %s\nERROR: %v\nSTDERR:\n%s",
-			urlStr, err, stderr.String(),
-		)
-		return nil, errors.New("failed to extract media information")
+		out, errStr, err := runWithRuntime(context.Background(), runtime, baseArgs)
+
+		if err == nil && out != "" {
+
+			var info ytdlpInfo
+
+			if jsonErr := json.Unmarshal([]byte(out), &info); jsonErr == nil {
+				return &info, nil
+			}
+		}
+
+		gologging.WarnF("Metadata runtime %s failed: %v\n%s", runtime, err, errStr)
 	}
 
-	var info ytdlpInfo
-	if err := json.Unmarshal(stdout.Bytes(), &info); err != nil {
-		gologging.ErrorF("YtDlp JSON parse error: %v\nRAW:\n%s", err, stdout.String())
-		return nil, errors.New("failed to parse media information")
-	}
-
-	return &info, nil
+	return nil, errors.New("failed to extract media information (all runtimes failed)")
 }
 
+//////////////////////////////////////////////////////////////
+
 func (y *YtdlpPlatform) infoToTrack(info *ytdlpInfo, video bool) *state.Track {
+
 	trackURL := info.URL
 	if info.OriginalURL != "" {
 		trackURL = info.OriginalURL
@@ -251,6 +305,8 @@ func (y *YtdlpPlatform) infoToTrack(info *ytdlpInfo, video bool) *state.Track {
 		Video:    video,
 	}
 }
+
+//////////////////////////////////////////////////////////////
 
 func (y *YtdlpPlatform) isYouTubeURL(urlStr string) bool {
 	for _, pattern := range youtubePatterns {
