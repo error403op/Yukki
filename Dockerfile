@@ -26,7 +26,7 @@ RUN chmod +x install.sh && \
 
 FROM debian:bookworm-slim
 
-# Base packages + aria2 (HUGE SPEED BOOST)
+# Base packages(VERY IMPORTANT)
 RUN apt-get update && \
     apt-get install -y \
         ffmpeg \
@@ -40,51 +40,78 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 
-# -------------------------------------------------------
-# Go DNS resolver + force IPv4
-# (REAL fix for Railway / weird networks)
-# -------------------------------------------------------
+#########################################################
+# Networking fixes (Railway / weird DNS environments)
+#########################################################
+
 ENV GODEBUG=netdns=go+v4
 ENV NTG_CALLS_IPV4_ONLY=1
 
 
-# -------- yt-dlp NIGHTLY (CRITICAL) --------
+#########################################################
+# yt-dlp NIGHTLY (DO NOT USE STABLE)
+#########################################################
+
 RUN curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && \
     chmod 0755 /usr/local/bin/yt-dlp
 
 
-# -------- Deno --------
-RUN curl -fsSL https://deno.land/install.sh | sh
-ENV PATH="/root/.deno/bin:${PATH}"
+#########################################################
+# GLOBAL DENO INSTALL (NOT /root)
+#########################################################
+
+RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local/deno sh && \
+    chmod -R 755 /usr/local/deno
+
+ENV PATH="/usr/local/deno/bin:${PATH}"
 
 
-# -------- Bun --------
-RUN curl -fsSL https://bun.sh/install | bash
-ENV PATH="/root/.bun/bin:${PATH}"
+#########################################################
+# GLOBAL BUN INSTALL (NOT /root)
+#########################################################
+
+RUN curl -fsSL https://bun.sh/install | bash && \
+    mv /root/.bun /usr/local/bun && \
+    chmod -R 755 /usr/local/bun
+
+ENV PATH="/usr/local/bun/bin:${PATH}"
 
 
-# -------- Runtime Verification (FAIL FAST) --------
+#########################################################
+# VERIFY RUNTIMES (FAIL FAST IF BROKEN)
+#########################################################
+
 RUN node -v && \
     bun -v && \
     deno --version && \
     yt-dlp --version
 
 
-# -------- Performance / Stability --------
+#########################################################
+# Performance / Stability
+#########################################################
+
 ENV YTDLP_CACHE_DIR=/tmp/yt-cache
 ENV PYTHONUNBUFFERED=1
 ENV YTDLP_NO_PART_FILES=1
+ENV GOMEMLIMIT=500MiB
 
 
-# -------- Certificates --------
+#########################################################
+# Certificates
+#########################################################
+
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 
 
-# -------- App User --------
+#########################################################
+# App User
+#########################################################
+
 RUN useradd -r -u 10001 appuser && \
-    mkdir -p /app && \
-    chown -R appuser:appuser /app
+    mkdir -p /app /tmp/yt-cache && \
+    chown -R appuser:appuser /app /tmp/yt-cache
 
 WORKDIR /app
 
