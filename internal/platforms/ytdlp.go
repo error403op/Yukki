@@ -144,7 +144,7 @@ func (y *YtdlpPlatform) Download(
 	}
 
 	baseArgs := []string{
-		"--no-playlist",
+		"--no-part",
 		"--ignore-errors",
 		"--no-warnings",
 
