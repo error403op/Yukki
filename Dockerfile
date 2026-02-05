@@ -1,18 +1,28 @@
+############################################
+#                BUILDER
+############################################
+
 FROM golang:1.25.5-bookworm AS builder
 
 WORKDIR /build
 
+# Install build tools (ADD tar + xz-utils → fixes extraction failures)
 RUN apt-get update && \
     apt-get install -y \
         git \
         gcc \
         unzip \
         curl \
-        zlib1g-dev && \
+        zlib1g-dev \
+        tar \
+        xz-utils && \
     rm -rf /var/lib/apt/lists/*
 
+
+# Better than go mod tidy for reproducible builds
 COPY go.mod go.sum ./
-RUN go mod tidy
+RUN go mod download
+
 
 COPY install.sh ./
 COPY . .
@@ -22,11 +32,14 @@ RUN chmod +x install.sh && \
     CGO_ENABLED=1 go build -v -trimpath -ldflags="-w -s" -o app ./cmd/app/
 
 
-# ======================= RUNTIME =======================
+
+############################################
+#                RUNTIME
+############################################
 
 FROM debian:bookworm-slim
 
-# Base packages(VERY IMPORTANT)
+# Install runtime packages + aria2 (VERY IMPORTANT)
 RUN apt-get update && \
     apt-get install -y \
         ffmpeg \
@@ -40,35 +53,28 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 
+
 #########################################################
-# Networking fixes (Railway / weird DNS environments)
+# Networking fixes (helps Railway / weird DNS)
 #########################################################
 
 ENV GODEBUG=netdns=go+v4
 ENV NTG_CALLS_IPV4_ONLY=1
 
 
+
 #########################################################
-# yt-dlp NIGHTLY (DO NOT USE STABLE)
+# yt-dlp NIGHTLY (CRITICAL — NEVER USE STABLE)
 #########################################################
 
 RUN curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && \
-    chmod 0755 /usr/local/bin/yt-dlp
+    chmod +x /usr/local/bin/yt-dlp
 
-
-#########################################################
-# GLOBAL DENO INSTALL (NOT /root)
-#########################################################
-
-RUN curl -fsSL https://deno.land/install.sh | DENO_INSTALL=/usr/local/deno sh && \
-    chmod -R 755 /usr/local/deno
-
-ENV PATH="/usr/local/deno/bin:${PATH}"
 
 
 #########################################################
-# GLOBAL BUN INSTALL (NOT /root)
+# Install Bun GLOBALLY (fixes root permission issue)
 #########################################################
 
 RUN curl -fsSL https://bun.sh/install | bash && \
@@ -78,8 +84,22 @@ RUN curl -fsSL https://bun.sh/install | bash && \
 ENV PATH="/usr/local/bun/bin:${PATH}"
 
 
+
 #########################################################
-# VERIFY RUNTIMES (FAIL FAST IF BROKEN)
+# Install Deno WITHOUT installer script (stable method)
+#########################################################
+
+RUN curl -L https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip \
+    -o deno.zip && \
+    unzip deno.zip && \
+    mv deno /usr/local/bin/deno && \
+    chmod +x /usr/local/bin/deno && \
+    rm deno.zip
+
+
+
+#########################################################
+# VERIFY RUNTIMES (FAIL FAST — PRODUCTION RULE)
 #########################################################
 
 RUN node -v && \
@@ -88,14 +108,16 @@ RUN node -v && \
     yt-dlp --version
 
 
+
 #########################################################
-# Performance / Stability
+# Performance / Stability ENV
 #########################################################
 
 ENV YTDLP_CACHE_DIR=/tmp/yt-cache
 ENV PYTHONUNBUFFERED=1
 ENV YTDLP_NO_PART_FILES=1
 ENV GOMEMLIMIT=500MiB
+
 
 
 #########################################################
@@ -105,8 +127,9 @@ ENV GOMEMLIMIT=500MiB
 COPY --from=builder /etc/ssl/certs /etc/ssl/certs
 
 
+
 #########################################################
-# App User
+# Non-root user (security best practice)
 #########################################################
 
 RUN useradd -r -u 10001 appuser && \
