@@ -26,52 +26,55 @@ RUN chmod +x install.sh && \
 
 FROM debian:bookworm-slim
 
-# Base packages
+# Base packages + aria2 (HUGE SPEED BOOST)
 RUN apt-get update && \
     apt-get install -y \
         ffmpeg \
         curl \
         unzip \
         ca-certificates \
+        nodejs \
+        npm \
         zlib1g && \
+    update-ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 
 # -------------------------------------------------------
-# Force IPv4 networking (Railway IPv6 breaks ntgcalls UDP)
-# -------------------------------------------------------
-RUN echo 'net.ipv6.conf.all.disable_ipv6 = 1' >> /etc/sysctl.conf && \
-    echo 'net.ipv6.conf.default.disable_ipv6 = 1' >> /etc/sysctl.conf
-
 # Go DNS resolver + force IPv4
+# (REAL fix for Railway / weird networks)
+# -------------------------------------------------------
 ENV GODEBUG=netdns=go+v4
 ENV NTG_CALLS_IPV4_ONLY=1
 
 
-# -------- yt-dlp --------
-RUN curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux \
+# -------- yt-dlp NIGHTLY (CRITICAL) --------
+RUN curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp \
     -o /usr/local/bin/yt-dlp && \
     chmod 0755 /usr/local/bin/yt-dlp
 
 
-# -------- Node.js (LTS, required for yt-dlp EJS solving) --------
-RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
-
-
 # -------- Deno --------
-ENV DENO_INSTALL=/usr/local/deno
-RUN mkdir -p $DENO_INSTALL && \
-    curl -fsSL https://deno.land/install.sh | sh
-ENV PATH=$DENO_INSTALL/bin:$PATH
+RUN curl -fsSL https://deno.land/install.sh | sh
+ENV PATH="/root/.deno/bin:${PATH}"
 
 
 # -------- Bun --------
-ENV BUN_INSTALL=/usr/local/bun
-RUN mkdir -p $BUN_INSTALL && \
-    curl -fsSL https://bun.sh/install | bash
-ENV PATH=$BUN_INSTALL/bin:$PATH
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+
+
+# -------- Runtime Verification (FAIL FAST) --------
+RUN node -v && \
+    bun -v && \
+    deno --version && \
+    yt-dlp --version
+
+
+# -------- Performance / Stability --------
+ENV YTDLP_CACHE_DIR=/tmp/yt-cache
+ENV PYTHONUNBUFFERED=1
+ENV YTDLP_NO_PART_FILES=1
 
 
 # -------- Certificates --------
