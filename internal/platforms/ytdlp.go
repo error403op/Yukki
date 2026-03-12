@@ -1,4 +1,3 @@
-
 package platforms
 
 import (
@@ -107,6 +106,17 @@ func (y *YtdlpPlatform) CanDownload(source state.PlatformName) bool {
 	return source == y.name || source == PlatformYouTube
 }
 
+func logLarge(prefix, text string) {
+	const chunk = 3000
+	for len(text) > chunk {
+		gologging.Error(prefix + text[:chunk])
+		text = text[chunk:]
+	}
+	if len(text) > 0 {
+		gologging.Error(prefix + text)
+	}
+}
+
 func (y *YtdlpPlatform) Download(
 	ctx context.Context,
 	track *state.Track,
@@ -121,10 +131,10 @@ func (y *YtdlpPlatform) Download(
 	gologging.InfoF("YtDlp: Downloading %s", track.Title)
 
 	args := []string{
+		"--force-ipv4",
 		"--no-playlist",
 		"--no-part",
 		"--geo-bypass",
-		"--force-ipv4",
 		"--no-check-certificate",
 		"--no-cache-dir",
 		"--concurrent-fragments", "4",
@@ -165,10 +175,10 @@ func (y *YtdlpPlatform) Download(
 		return "", err
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-
 	var stdoutBuf, stderrBuf bytes.Buffer
+	var wg sync.WaitGroup
+
+	wg.Add(2)
 
 	go func() {
 		defer wg.Done()
@@ -180,21 +190,27 @@ func (y *YtdlpPlatform) Download(
 		io.Copy(&stderrBuf, stderrPipe)
 	}()
 
-	wg.Wait()
-
 	err := cmd.Wait()
+	wg.Wait()
 
 	outStr := stdoutBuf.String()
 	errStr := stderrBuf.String()
 
 	if err != nil {
-		gologging.ErrorF(
-			"YtDlp Download Failed\nURL: %s\nError: %v\nSTDOUT:\n%s\nSTDERR:\n%s",
-			track.URL,
-			err,
-			outStr,
-			errStr,
-		)
+
+		gologging.Error("YtDlp Download Failed")
+		gologging.ErrorF("URL: %s", track.URL)
+		gologging.ErrorF("Error: %v", err)
+
+		if outStr != "" {
+			gologging.Error("----- YTDLP STDOUT -----")
+			logLarge("", outStr)
+		}
+
+		if errStr != "" {
+			gologging.Error("----- YTDLP STDERR -----")
+			logLarge("", errStr)
+		}
 
 		findAndRemove(track)
 
@@ -247,11 +263,8 @@ func (y *YtdlpPlatform) extractMetadata(urlStr string) (*ytdlpInfo, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		gologging.ErrorF(
-			"YtDlp Metadata Error: %v\n%s",
-			err,
-			stderr.String(),
-		)
+		gologging.ErrorF("YtDlp Metadata Error: %v", err)
+		logLarge("", stderr.String())
 		return nil, fmt.Errorf("metadata extraction failed: %w", err)
 	}
 
