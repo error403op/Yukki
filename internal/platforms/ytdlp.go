@@ -136,6 +136,7 @@ func (y *YtdlpPlatform) Download(
 		"--no-part",
 		"--geo-bypass",
 		"--no-check-certificate",
+		"--extractor-args", "youtube:player_client=android", 
 		"--no-cache-dir",
 		"--concurrent-fragments", "4",
 		"--progress",
@@ -153,7 +154,7 @@ func (y *YtdlpPlatform) Download(
 		)
 	} else {
 		args = append(args,
-			"-f", "ba[abr>=180][abr<=360]/ba",
+			"-f", "bestaudio/b",
 			"-x",
 		)
 	}
