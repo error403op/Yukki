@@ -139,9 +139,7 @@ func (y *YtdlpPlatform) Download(
 		"--extractor-args", "youtube:player_client=android", 
 		"--no-cache-dir",
 		"--concurrent-fragments", "4",
-		"--progress",
 		"--newline",
-		"--print-traffic",
 		"-v",
 		"-o", getPath(track, ".%(ext)s"),
 	}
@@ -154,7 +152,7 @@ func (y *YtdlpPlatform) Download(
 		)
 	} else {
 		args = append(args,
-			"-f", "bestaudio/b",
+			"-f", "ba/b",
 			"-x",
 		)
 	}
